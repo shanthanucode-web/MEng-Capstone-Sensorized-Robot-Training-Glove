@@ -106,12 +106,111 @@ the cleaned session into the database, and exports `dataset_all.csv` and
 
 ---
 
+## Demo Visualization
+
+`demo_visualizer.py` is the primary demo tool. It renders a skeletal hand with
+VisPy lines and joint markers, using the same quaternion/flex/FSR state shape as
+the live glove stream. It supports three input modes:
+
+```bash
+# Live glove over USB serial
+python demo_visualizer.py
+
+# Replay a recorded session once
+python demo_visualizer.py --replay session_20260415_190134.csv
+
+# Replay continuously for unattended demos
+python demo_visualizer.py --replay session_20260415_190134.csv --loop
+
+# Synthetic 8-second pick-and-place loop
+python demo_visualizer.py --simulate
+```
+
+### Visual Style and Controls
+
+- Skeletal hand: colored line bones plus white disc joint markers
+- All five fingers are shown; ring and pinky passively follow the middle finger
+- FSR contact pulses fingertip markers red and scales marker size by pressure
+- Wrist quaternion rotates the full skeleton as a rigid body
+- Camera: left-drag to orbit, scroll to zoom
+- Press `C` in live or replay mode to capture the current quaternion as the
+  neutral reference pose
+
+HUD fields show the current mode, simulation phase, quaternion, sample rate, and
+replay timestamp/total duration where applicable.
+
+### Replay CSV Support
+
+Replay mode detects supported CSV schemas automatically.
+
+Legacy root-level session CSVs use:
+
+```text
+timestamp_ms,qw,qx,qy,qz,
+flex_thumb,flex_upper_index,flex_lower_index,flex_upper_middle,flex_lower_middle
+```
+
+These map directly into the demo flex controls:
+
+```text
+[thumb, index upper, index lower, middle upper, middle lower]
+```
+
+New pipeline raw CSVs use:
+
+```text
+timestamp_ms,qw,qx,qy,qz,
+flex_thumb,flex_index,flex_middle,flex_ring,flex_pinky,
+fsr_index,fsr_middle,fsr_thumb,task,subject
+```
+
+For the skeletal demo, the single `flex_index` value drives both index segments
+and the single `flex_middle` value drives both middle segments:
+
+```text
+[flex_thumb, flex_index, flex_index, flex_middle, flex_middle]
+```
+
+If FSR columns are missing, replay defaults pressure to `[0.0, 0.0, 0.0]`.
+Replay timing is preserved by sleeping between rows according to
+`timestamp_ms` deltas. `--loop` restarts after a short pause.
+
+### Synthetic Demo Mode
+
+`python demo_visualizer.py --simulate` runs a continuous 8-second
+pick-and-place loop:
+
+| Phase | Time | Behavior |
+|---|---:|---|
+| REST | 0.0-0.5s | Hand open, wrist neutral |
+| REACHING | 0.5-2.0s | Wrist pitches downward, fingers open |
+| PRE-GRASP | 2.0-2.5s | Fingers begin curling, no contact |
+| GRASPING | 2.5-3.5s | Fingers curl, FSR contact ramps after flex passes ~0.7 |
+| HOLDING | 3.5-4.5s | Stable grasp, wrist rotates toward transport pose |
+| RELEASING | 4.5-5.3s | FSR drops before fingers fully open |
+| RETRACTING | 5.3-6.3s | Wrist returns to neutral |
+| REST | 6.3-8.0s | Open hand holds before the next loop |
+
+Flex and pressure transitions use smoothstep easing. Wrist orientation uses
+quaternion SLERP between keyframes.
+
+### Other Visualization Tools
+
+- `glove_visualization.py` renders the solid robot-hand mesh and remains useful
+  for robot-hand-style demos.
+- `flex_visualization.py` is a flex-only skeleton debug view.
+- `pressure_visualization.py` is a pressure-only FSR debug view.
+- `visualize_imu.py` is a legacy all-finger mesh visualizer.
+
+---
+
 ## Repository Structure
 
 ```text
 src/main.cpp              ESP32 firmware
 platformio.ini            PlatformIO build configuration
 glove_serial.py           Shared serial-port auto-detection
+demo_visualizer.py        Primary skeletal demo: live, replay, and simulation
 visualize_imu.py          Legacy 3D hand visualization
 glove_visualization.py    Main robot-hand visualization
 flex_visualization.py     Flex-only visualization/debug tool

@@ -61,12 +61,58 @@ Use the simulator to validate the full pipeline without hardware:
 Generated databases, session CSVs, and dataset exports are local artifacts and
 are ignored by git.
 
+## Demo Visualizer
+
+`demo_visualizer.py` is the primary visual demo. It uses a skeletal VisPy hand
+style based on `flex_visualization.py`, not the solid robot mesh from
+`glove_visualization.py`.
+
+Launch modes:
+
+    python demo_visualizer.py
+    python demo_visualizer.py --replay session_20260415_190134.csv
+    python demo_visualizer.py --replay session_20260415_190134.csv --loop
+    python demo_visualizer.py --simulate
+
+Modes:
+
+- Live mode opens the glove serial port with `glove_serial.open_glove_serial()`
+  and parses `Q:`, `F:`, and `P:` lines.
+- Replay mode reads CSV rows in timestamp order, sleeps by `timestamp_ms`
+  deltas, and can loop continuously with `--loop`.
+- Simulate mode generates an 8-second pick-and-place loop with smooth flex/FSR
+  transitions and quaternion SLERP.
+
+Replay schemas:
+
+- Legacy CSVs map
+  `flex_thumb, flex_upper_index, flex_lower_index, flex_upper_middle, flex_lower_middle`
+  directly to the 5 demo flex controls.
+- New pipeline CSVs map `flex_index` to both index controls and `flex_middle`
+  to both middle controls:
+  `[flex_thumb, flex_index, flex_index, flex_middle, flex_middle]`.
+- Missing FSR columns default to `[0.0, 0.0, 0.0]`.
+
+Skeleton behavior:
+
+- Palm and wrist are line segments.
+- Thumb has two segments; all other fingers have MCP/PIP/DIP chains.
+- Ring follows middle at 90%; pinky follows middle at 78%.
+- FSR contact above 0.08 pulses index, middle, and thumb tips red.
+- Press `C` in live/replay mode to recapture the neutral quaternion.
+
 ## Validation Tools
 
     python test_imu.py
     python test_flex.py
     python test_fsr.py
     python test_mux.py
+
+Demo validation:
+
+    python3 -m py_compile demo_visualizer.py
+    python demo_visualizer.py --replay session_20260415_190134.csv --loop
+    python demo_visualizer.py --simulate
 
 `test_mux.py` requires a temporary firmware debug command and should not be left
 enabled in production firmware.
