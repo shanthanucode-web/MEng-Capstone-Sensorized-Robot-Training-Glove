@@ -5,3 +5,8 @@ __pycache__/
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+glove_dataset.db
+dataset_*.csv
+dataset_*.npz
+sessions/raw/*.csv
+sessions/cleaned/*.csv

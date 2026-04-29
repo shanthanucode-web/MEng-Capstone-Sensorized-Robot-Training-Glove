@@ -26,8 +26,8 @@ BAUD_RATE   = 115200
 # Shared state
 # ---------------------------------------------------------------------------
 latest_quat  = [1.0, 0.0, 0.0, 0.0]  # w, x, y, z
-latest_flex  = [0.2] * 5             # per-finger, 0=extended, 1=fully curled
-latest_force = [0.2] * 5             # per-fingertip, 0=none, 1=max
+latest_flex  = [0.0] * 5             # per-finger, 0=extended, 1=fully curled
+latest_force = [0.0] * 5             # per-fingertip, 0=none, 1=max
 quat_lock    = threading.Lock()
 flex_lock    = threading.Lock()
 force_lock   = threading.Lock()

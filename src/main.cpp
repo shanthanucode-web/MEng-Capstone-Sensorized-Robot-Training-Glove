@@ -231,6 +231,7 @@ void setup() {
     bootLog("BNO085 not detected at 0x4A or 0x4B - continuing without IMU");
   }
   bootLog("firmware ready");
+  Serial.println("SESSION_START");
 }
 
 void loop() {
@@ -325,37 +326,5 @@ void loop() {
   }
   Serial.println();
 
-  // --------------------------------------------------------------------------
-  // Human-readable output — for serial monitor debugging
-  // Shows both raw ADC and normalized value side-by-side for calibration
-  // --------------------------------------------------------------------------
-  Serial.print("Quat   | W:"); Serial.print(qw, 3);
-  Serial.print(" X:"); Serial.print(qx, 3);
-  Serial.print(" Y:"); Serial.print(qy, 3);
-  Serial.print(" Z:"); Serial.print(qz, 3);
-  Serial.print("  Acc:"); Serial.println(quatAccuracy);
-  if (!imuOk) {
-    Serial.println("IMU    | not detected - retrying init in background");
-  }
-
-  Serial.print("Flex   | T:");  Serial.print(raw[0]);
-  Serial.print("("); Serial.print(flex[0], 2); Serial.print(")");
-  Serial.print("  UI:"); Serial.print(raw[1]);
-  Serial.print("("); Serial.print(flex[1], 2); Serial.print(")");
-  Serial.print("  LI:"); Serial.print(raw[2]);
-  Serial.print("("); Serial.print(flex[2], 2); Serial.print(")");
-  Serial.print("  UM:"); Serial.print(raw[3]);
-  Serial.print("("); Serial.print(flex[3], 2); Serial.print(")");
-  Serial.print("  LM:"); Serial.print(raw[4]);
-  Serial.print("("); Serial.print(flex[4], 2); Serial.println(")");
-
-  Serial.print("Press  | P1:"); Serial.print(pressureRaw[0]);
-  Serial.print("("); Serial.print(pressure[0], 2); Serial.print(")");
-  Serial.print("  P2:"); Serial.print(pressureRaw[1]);
-  Serial.print("("); Serial.print(pressure[1], 2); Serial.print(")");
-  Serial.print("  P3:"); Serial.print(pressureRaw[2]);
-  Serial.print("("); Serial.print(pressure[2], 2); Serial.println(")");
-
-  Serial.println("---");
   delay(100);
 }
