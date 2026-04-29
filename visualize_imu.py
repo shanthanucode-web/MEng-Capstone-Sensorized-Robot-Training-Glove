@@ -9,17 +9,17 @@
 # Close the PlatformIO serial monitor before running.
 # Left-click drag to orbit, scroll to zoom.
 #
-# Future serial lines (not yet sent by firmware):
+# Serial lines:
 #   F:f0,f1,f2,f3,f4  — flex sensor values per finger (0.0=open, 1.0=closed)
-#   P:p0,p1,p2,p3,p4  — FSR force per fingertip (0.0=none, 1.0=max)
+#   P:p1,p2,p3  — FSR force values from mux Y5-Y7 (0.0=none, 1.0=max)
 
 import threading
 import time
 import numpy as np
 import serial
 from vispy import scene, app
+from glove_serial import open_glove_serial
 
-SERIAL_PORT = "/dev/cu.usbmodem101"
 BAUD_RATE   = 115200
 
 # ---------------------------------------------------------------------------
@@ -42,11 +42,8 @@ def read_serial():
     global serial_ok
     while True:
         try:
-            ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1,
-                                dsrdtr=False, rtscts=False)
-            ser.dtr = False
-            ser.rts = False
-            print(f"[serial] port opened: {SERIAL_PORT}")
+            ser, port = open_glove_serial(BAUD_RATE, timeout=1)
+            print(f"[serial] port opened: {port}")
             while True:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 if line.startswith('Q:'):
@@ -65,9 +62,10 @@ def read_serial():
                             latest_flex[:] = [float(p) for p in parts]
                 elif line.startswith('P:'):
                     parts = line[2:].split(',')
-                    if len(parts) == 5:
+                    if len(parts) == 3:
                         with force_lock:
-                            latest_force[:] = [float(p) for p in parts]
+                            latest_force[:3] = [float(p) for p in parts]
+                            latest_force[3:] = [0.0, 0.0]
         except serial.SerialException as e:
             print(f"[serial] connection error: {e} — retrying in 2s...")
             time.sleep(2)

@@ -34,8 +34,8 @@ import pandas as pd
 # Current firmware calibration constants — must match main.cpp exactly
 # so the back-calculation is correct
 # ---------------------------------------------------------------------------
-CURRENT_FLEX_MIN = [2800, 2800, 2800, 2800, 2800]
-CURRENT_FLEX_MAX = [3700, 3700, 3700, 3700, 3700]
+CURRENT_FLEX_MIN = [2800, 3273, 2972, 3642, 3271]
+CURRENT_FLEX_MAX = [3700, 3700, 3584, 3700, 3682]
 
 # Sensor names in CSV column order (index 0 = thumb)
 SENSOR_NAMES = [
@@ -91,13 +91,6 @@ def analyze(csv_path):
     print("=" * 72)
 
     for idx, col in enumerate(SENSOR_NAMES):
-        # Thumb sensor is broken — skip analysis, keep existing constants
-        if idx == 0:
-            print(f"  {col:<20}  {'—':>7}  {'—':>7}  {'—':>9}  "
-                  f"{CURRENT_FLEX_MIN[0]:>7}  {CURRENT_FLEX_MAX[0]:>7}  "
-                  f"SKIPPED (disconnected)")
-            continue
-
         norm = df[col]
 
         # Back-calculate raw ADC series from normalized values
@@ -143,7 +136,7 @@ def analyze(csv_path):
     mins_str = ", ".join(str(v) for v in new_mins)
     maxs_str = ", ".join(str(v) for v in new_maxs)
 
-    print("  Copy-paste into main.cpp (thumb kept at existing values):")
+    print("  Copy-paste into main.cpp:")
     print()
     print(f"  const int FLEX_MIN[5] = {{{mins_str}}};  // flat/extended")
     print(f"  const int FLEX_MAX[5] = {{{maxs_str}}};  // fully curled")

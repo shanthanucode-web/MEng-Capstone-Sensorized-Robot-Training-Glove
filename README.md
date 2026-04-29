@@ -1,6 +1,6 @@
 # Sensorized Robot Training Glove — ESP32-S3 Firmware & Toolchain
 
-A wearable data glove that captures hand orientation and finger curl in real time, streams both over USB serial, and renders them as a live 3D skeletal hand visualization. Designed for hand-pose capture in robot training environments where magnetic interference makes traditional IMU fusion unreliable.
+A wearable data glove that captures hand orientation, finger curl, and pressure contact in real time, streams them over USB serial, and renders them as a live 3D robot-hand visualization. Designed for hand-pose capture in robot training environments where magnetic interference makes traditional IMU fusion unreliable.
 
 ---
 
@@ -41,6 +41,7 @@ Capture and visualize hand pose data from a sensorized glove for use in robot te
 
 - Track full hand orientation in 3D space using an IMU
 - Track individual finger curl for the thumb, index, and middle fingers
+- Track three pressure/FSR contact points
 - Stream data continuously at a consistent rate (~10 Hz)
 - Remain stable in environments with motors, metal, and magnetic interference
 - Provide real-time visualization and offline calibration tooling
@@ -49,11 +50,12 @@ Capture and visualize hand pose data from a sensorized glove for use in robot te
 
 ## Outcome
 
-The glove streams two compact serial lines every 100ms — a quaternion (`Q:`) and normalized flex values (`F:`) — which Python tools parse live to render a 3D skeletal hand that rotates with the glove and curls fingers as they bend. Sessions can be recorded to timestamped CSVs, and a calibration tool analyzes recordings to recommend per-sensor tuning constants for the firmware.
+The glove streams three compact serial lines every 100ms — a quaternion (`Q:`), normalized flex values (`F:`), and normalized pressure values (`P:`) — which Python tools parse live to render a 3D hand that rotates with the glove, curls fingers as they bend, and shows pressure contact. Sessions can be recorded to timestamped CSVs, and a calibration tool analyzes recordings to recommend per-sensor tuning constants for the firmware.
 
 ```
 Q:0.9997,0.0067,-0.0211,-0.0097
 F:1.000,0.000,0.000,0.000,0.015
+P:0.000,0.438,0.912
 ```
 
 ---
@@ -67,7 +69,8 @@ F:1.000,0.000,0.000,0.000,0.015
 | Microcontroller | ESP32-S3-N8R8 DevKitC-1 | 8MB flash, 8MB OPI PSRAM, native USB CDC |
 | IMU | Adafruit BNO085 | 9-DOF, I2C, address `0x4A` |
 | Flex sensors | 5x generic resistive flex sensors | ~10–25kΩ flat, ~50–100kΩ fully bent |
-| Resistors | 5x 10kΩ | Voltage divider pull-downs, one per flex sensor |
+| Pressure sensors | 3x FSR sensors | Routed through CD4051BE Y5-Y7 |
+| Resistors | 8x 10kΩ | Voltage divider pull-ups, one per analog sensor |
 | Power | USB 5V (from host) → 3.3V via onboard LDO | |
 | Connection | USB-C cable | Upload + serial monitor + power |
 
@@ -79,7 +82,7 @@ F:1.000,0.000,0.000,0.000,0.015
 Glove Hardware
 ├── ESP32-S3-N8R8 DevKitC-1
 │   ├── USB-C (native CDC)
-│   │   ├── Serial data out (Q: and F: lines at 115200 baud)
+│   │   ├── Serial data out (Q:, F:, and P: lines at 115200 baud)
 │   │   ├── Firmware upload (esp-builtin JTAG over USB)
 │   │   └── Power input (5V → 3.3V onboard LDO)
 │   │
@@ -89,19 +92,25 @@ Glove Hardware
 │   │       ├── Gyroscope
 │   │       └── Magnetometer (unused — Game Rotation Vector mode)
 │   │
-│   └── ADC1 (12-bit, 0–4095)
-│       ├── GPIO1  — Thumb flex sensor        [currently disconnected]
-│       ├── GPIO2  — Upper index flex sensor
-│       ├── GPIO3  — SKIPPED (strapping pin, boot-unsafe)
-│       ├── GPIO4  — Lower index flex sensor
-│       ├── GPIO5  — Upper middle flex sensor
-│       └── GPIO6  — Lower middle flex sensor
+│   └── Analog Sensor Mux (CD4051BE)
+│       ├── GPIO4  — ADC1 CH3, mux Z/common output
+│       ├── GPIO5  — mux A / select bit 0
+│       ├── GPIO6  — mux B / select bit 1
+│       ├── GPIO7  — mux C / select bit 2
+│       ├── Y0     — Thumb flex sensor
+│       ├── Y1     — Upper index flex sensor
+│       ├── Y2     — Lower index flex sensor
+│       ├── Y3     — Lower middle flex sensor
+│       ├── Y4     — Upper middle flex sensor
+│       ├── Y5     — FSR pressure sensor 1
+│       ├── Y6     — FSR pressure sensor 2
+│       └── Y7     — FSR pressure sensor 3
 │
-└── Flex Sensor Voltage Dividers (per sensor)
+└── Analog Sensor Voltage Dividers (per sensor)
     ├── 3.3V rail
     ├── 10kΩ fixed resistor
-    ├── ADC pin (reads midpoint voltage)
-    ├── Flex sensor (variable resistance)
+    ├── CD4051BE mux channel (reads midpoint voltage)
+    ├── Flex/FSR sensor (variable resistance)
     └── GND
 ```
 
@@ -116,7 +125,7 @@ Each flex sensor is wired as a voltage divider against a fixed 10kΩ resistor:
  |
 [10kΩ fixed]
  |
- +——— ADC pin (GPIO 1/2/4/5/6)
+ +——— CD4051BE Y channel
  |
 [flex sensor]   ~10–25kΩ flat  /  ~50–100kΩ fully bent
  |
@@ -127,20 +136,26 @@ GND
 - **Finger extended (flat):** flex resistance ~10–25kΩ → lower midpoint voltage → lower ADC value (~2800)
 - **Finger curled (bent):** flex resistance ~50–100kΩ → higher midpoint voltage → higher ADC value (~3700)
 
-The firmware maps this range to [0.0 = open, 1.0 = closed] using per-sensor `FLEX_MIN`/`FLEX_MAX` constants.
+The firmware maps this range to [0.0 = open, 1.0 = closed] using per-sensor `FLEX_MIN`/`FLEX_MAX` constants. FSR pressure sensors use the same divider orientation, but their normalization is inverted: no pressure reads high and maps to 0.0, while firm pressure reads lower and maps to 1.0 using `PRESSURE_IDLE`/`PRESSURE_PRESS`.
 
 ---
 
 ### Pin Assignment Table
 
-| GPIO | ADC Channel | Function | Status |
+| GPIO / Mux | ADC Channel | Function | Status |
 |---|---|---|---|
-| GPIO1 | ADC1 CH0 | Thumb flex sensor | Disconnected (reads unreliably) |
-| GPIO2 | ADC1 CH1 | Upper index flex sensor | Active |
-| GPIO3 | — | **SKIPPED** — strapping pin | Boot-unsafe if pulled low |
-| GPIO4 | ADC1 CH3 | Lower index flex sensor | Active |
-| GPIO5 | ADC1 CH4 | Upper middle flex sensor | Active |
-| GPIO6 | ADC1 CH5 | Lower middle flex sensor | Active |
+| GPIO4 | ADC1 CH3 | CD4051BE Z/common output | Active |
+| GPIO5 | — | CD4051BE A / select bit 0 | Active |
+| GPIO6 | — | CD4051BE B / select bit 1 | Active |
+| GPIO7 | — | CD4051BE C / select bit 2 | Active |
+| CD4051BE Y0 | — | Thumb flex sensor | Active |
+| CD4051BE Y1 | — | Upper index flex sensor | Active |
+| CD4051BE Y2 | — | Lower index flex sensor | Active |
+| CD4051BE Y3 | — | Lower middle flex sensor | Active |
+| CD4051BE Y4 | — | Upper middle flex sensor | Active |
+| CD4051BE Y5 | — | FSR pressure sensor 1 | Active |
+| CD4051BE Y6 | — | FSR pressure sensor 2 | Active |
+| CD4051BE Y7 | — | FSR pressure sensor 3 | Active |
 | GPIO8 | — | I2C SDA (BNO085) | Active |
 | GPIO9 | — | I2C SCL (BNO085) | Active |
 
@@ -153,14 +168,15 @@ The firmware maps this range to [0.0 = open, 1.0 = closed] using per-sensor `FLE
 ```
 Glove_IMUBNO055_ESP32/
 ├── src/
-│   └── main.cpp                  Firmware — IMU + flex read loop, serial output
+│   └── main.cpp                  Firmware — IMU + flex + pressure read loop, serial output
 │
 ├── platformio.ini                PlatformIO build config (board, libs, upload protocol)
 │
 ├── Python Tools
-│   ├── glove_visualization.py    Full visualizer: 3D skeleton + flex bars + HUD
+│   ├── glove_visualization.py    Full visualizer: 3D robot hand + flex/pressure bars + HUD
 │   ├── flex_visualization.py     Flex-only test tool: fixed camera, no IMU
-│   ├── record_session.py         Records quaternion + flex to timestamped CSV
+│   ├── pressure_visualization.py Pressure-only test tool for the 3 FSR channels
+│   ├── record_session.py         Records quaternion + flex + pressure to timestamped CSV
 │   ├── calibrate_flex.py         Analyzes CSV and recommends FLEX_MIN/FLEX_MAX constants
 │   └── visualize_imu.py          Legacy: solid mesh hand, IMU-only (no flex bars)
 │
@@ -184,7 +200,7 @@ Glove_IMUBNO055_ESP32/
 
 ### Firmware (`src/main.cpp`)
 
-The firmware runs a single 100ms loop that reads both sensors and emits two lines of serial output.
+The firmware runs a single 100ms loop that reads the IMU, flex sensors, and pressure sensors, then emits three lines of serial output.
 
 #### `setup()`
 
@@ -213,19 +229,25 @@ The firmware runs a single 100ms loop that reads both sensors and emits two line
    └── Updates qw, qx, qy, qz from the freshest SH2_GAME_ROTATION_VECTOR event
 
 2. Read flex sensors
-   analogRead(GPIO1/2/4/5/6) × 5
+   select CD4051BE channels Y0/Y1/Y2/Y4/Y3 and analogRead(GPIO4)
    └── 12-bit raw values (0–4095)
 
 3. Normalize flex
    normalizeFlex(raw, idx) = clamp((raw - FLEX_MIN[idx]) / (FLEX_MAX[idx] - FLEX_MIN[idx]), 0.0, 1.0)
 
-4. Machine-readable output
+4. Read and normalize pressure sensors
+   select CD4051BE channels Y5/Y6/Y7 and analogRead(GPIO4)
+   normalizePressure(raw, idx) = clamp((PRESSURE_IDLE[idx] - raw) / (PRESSURE_IDLE[idx] - PRESSURE_PRESS[idx]), 0.0, 1.0)
+
+5. Machine-readable output
    Serial.println("Q:w,x,y,z")      — quaternion (4 decimal places)
    Serial.println("F:t,ui,li,um,lm") — normalized flex (3 decimal places)
+   Serial.println("P:p1,p2,p3")      — normalized pressure (3 decimal places)
 
-5. Human-readable output
+6. Human-readable output
    "Quat | W:... X:... Y:... Z:... Acc:..."
    "Flex | T:raw(norm) UI:raw(norm) ..."
+   "Press | P1:raw(norm) P2:raw(norm) P3:raw(norm)"
    "---"
 ```
 
@@ -244,7 +266,7 @@ For hand-pose capture sessions (seconds to tens of seconds), heading drift is ne
 
 ### Serial Protocol
 
-Two machine-readable lines are emitted every 100ms. All Python tools parse only these — all other lines (`Quat |`, `Flex |`, `---`) are ignored.
+Three machine-readable lines are emitted every 100ms. All Python tools parse only these — all other lines (`Quat |`, `Flex |`, `Press |`, `---`) are ignored.
 
 ```
 Q:w,x,y,z
@@ -262,25 +284,39 @@ F:t,ui,li,um,lm
 - 3 decimal places
 - Example: `F:1.000,0.312,0.448,0.000,0.021`
 
+```
+P:p1,p2,p3
+```
+- Normalized pressure values from FSR channels Y5, Y6, Y7
+- Range: `0.000` = no pressure, `1.000` = firm calibrated pressure
+- 3 decimal places
+- Example: `P:0.000,0.438,0.912`
+
 **Field mapping:**
 
 | Position | Field | Sensor | GPIO |
 |---|---|---|---|
-| `t` | Thumb | Disconnected — always unreliable | GPIO1 |
-| `ui` | Upper Index | Proximal index segment | GPIO2 |
-| `li` | Lower Index | Distal index segment | GPIO4 |
-| `um` | Upper Middle | Proximal middle segment | GPIO5 |
-| `lm` | Lower Middle | Distal middle segment | GPIO6 |
+| `t` | Thumb | Thumb curl | CD4051BE Y0 |
+| `ui` | Upper Index | Proximal index segment | CD4051BE Y1 |
+| `li` | Lower Index | Distal index segment | CD4051BE Y2 |
+| `um` | Upper Middle | Proximal middle segment | CD4051BE Y4 |
+| `lm` | Lower Middle | Distal middle segment | CD4051BE Y3 |
+
+| Position | Field | Sensor | GPIO |
+|---|---|---|---|
+| `p1` | Pressure 1 | FSR 1 | CD4051BE Y5 |
+| `p2` | Pressure 2 | FSR 2 | CD4051BE Y6 |
+| `p3` | Pressure 3 | FSR 3 | CD4051BE Y7 |
 
 ---
 
 ### Python Tools
 
-All tools connect to `/dev/cu.usbmodem101` at 115200 baud. They open serial with `dsrdtr=False, rtscts=False` to prevent DTR/RTS from resetting the ESP32, and auto-reconnect if the port drops.
+All tools auto-detect the current glove serial device, preferring `/dev/cu.usbmodem*` and then `/dev/cu.usbserial*`, at 115200 baud. Set `GLOVE_SERIAL_PORT` to override this if needed. They open serial with `dsrdtr=False, rtscts=False` to prevent DTR/RTS from resetting the ESP32, and auto-reconnect if the port drops.
 
 #### `glove_visualization.py` — Full Real-Time Visualizer
 
-The primary visualization tool. Renders a 3D skeletal hand that tracks IMU orientation and curls fingers with flex sensor data.
+The primary visualization tool. Renders a solid 3D robot hand that tracks IMU orientation, curls fingers with flex sensor data, and shows pressure values from the FSR channels.
 
 **Architecture:**
 
@@ -288,19 +324,21 @@ The primary visualization tool. Renders a 3D skeletal hand that tracks IMU orien
 glove_visualization.py
 ├── Section 1: Constants
 │   ├── Window size (1280×800)
-│   ├── Colors (RGBA numpy arrays per bone, joint, bar)
+│   ├── Colors (RGBA numpy arrays per hand part, joint, flex bar, pressure bar)
 │   ├── Hand geometry (palm nodes, wrist anchors, segment lengths)
 │   └── FINGER_DEFS — (name, palm_node, splay_deg, upper_flex_idx, lower_flex_idx, color)
 │
 ├── Section 2: Shared State (_state dict + threading.Lock)
 │   ├── 'q'     — latest quaternion [w, x, y, z]
 │   ├── 'f'     — latest flex values [0..1] × 5
+│   ├── 'p'     — latest pressure values [0..1] × 3
 │   ├── 'acc'   — BNO085 accuracy level (0–3)
 │   └── 'times' — deque of F: arrival timestamps (for Hz calculation)
 │
 ├── Section 3: Serial Thread (daemon)
 │   ├── Parses Q: → updates _state['q']
 │   ├── Parses F: → updates _state['f'] + timestamps
+│   ├── Parses P: → updates _state['p']
 │   └── Auto-reconnects on SerialException
 │
 ├── Section 4: Quaternion Math
@@ -308,16 +346,19 @@ glove_visualization.py
 │   ├── _qrel(ref, q)  — relative quaternion (removes calibration offset)
 │   └── _qmat(w,x,y,z) — quaternion → 3×3 rotation matrix
 │
-├── Section 5: Skeleton Geometry
-│   └── compute_skeleton(flex, R_imu)
-│       ├── Builds palm: 4 metacarpal edges + 2 lateral edges + wrist crossbar
-│       ├── For each finger: R_splay @ R_upper_curl @ R_lower_curl → knuckle, tip
-│       └── Applies R_imu to all vertices (bone_verts, joint_pos)
+├── Section 5: Robot Hand Geometry
+│   ├── compute_hand_pose(flex)
+│   │   └── Calculates thumb/index/middle live joints plus passive ring/pinky
+│   └── build_hand_mesh(flex, pressure, R_imu)
+│       ├── Builds palm shell, wrist mount, finger plates, hinges, and rivets
+│       ├── Adds pressure pads to the live fingertips
+│       └── Applies R_imu to all mesh vertices
 │
-├── Section 6: Flex Bar Geometry (2D panel)
+├── Section 6: Flex/Pressure Bar Geometry (2D panel)
 │   ├── _bar_quad()       — single bar filled quad
 │   ├── build_fill_mesh() — all 5 fill bars as one Mesh
-│   └── build_track_mesh()— static dark background tracks
+│   ├── build_track_mesh()— static dark background tracks
+│   └── build_pressure_fill_mesh() — all 3 pressure bars as one Mesh
 │
 ├── Section 7: Serial Thread Start
 │
@@ -327,8 +368,9 @@ glove_visualization.py
 │
 ├── Section 9: Timer Callback (30fps)
 │   ├── Reads _state under lock
-│   ├── _qrel → _qmat → compute_skeleton → update hand_lines + hand_joints
-│   ├── build_fill_mesh → update bar_fills + value_texts
+│   ├── _qrel → _qmat → build_hand_mesh → update hand_mesh
+│   ├── build_fill_mesh → update flex bars + value_texts
+│   ├── build_pressure_fill_mesh → update pressure bars
 │   └── Update HUD (quaternion, accuracy, sample rate)
 │
 ├── Section 10: Keyboard Handler
@@ -338,7 +380,7 @@ glove_visualization.py
 ```
 
 **Key design decisions:**
-- **Chained rotation model:** Each finger has two segments. The lower segment's curl is applied in the local frame of the upper segment (`R_splay @ R_upper @ R_lower`), producing a realistic closed-fist shape at full flex.
+- **Chained rotation model:** Each live finger has two segments. The lower segment's curl is applied in the local frame of the upper segment (`R_splay @ R_upper @ R_lower`), producing a realistic closed-fist shape at full flex.
 - **Calibration reference:** `_ref_q` stores the quaternion at the moment `C` is pressed. `_qrel` subtracts this from all subsequent readings so the hand always shows its pose relative to the neutral reference.
 - **Lock discipline:** The serial thread holds `_lock` only while writing to `_state`. The timer callback holds it only while copying values out. The lock is never held across rendering.
 
@@ -353,23 +395,32 @@ Simplified version of the full visualizer. Uses the same skeleton geometry and b
 | Feature | `glove_visualization.py` | `flex_visualization.py` |
 |---|---|---|
 | IMU quaternion | Live from serial | Fixed matrix (no rotation) |
-| Serial lines parsed | `Q:` and `F:` | `F:` only |
+| Serial lines parsed | `Q:`, `F:`, and `P:` | `F:` only |
 | Calibration (`C` key) | Yes | No |
 | Accuracy HUD | Yes | No |
 | Camera preset | Slight elevation, angled | Front-facing |
 
 ---
 
+#### `pressure_visualization.py` — Pressure Sensor Test Tool
+
+Pressure-only test tool for the three FSR channels. It parses only `P:p1,p2,p3`
+lines and shows large live force pads plus horizontal bars. Use this when tuning
+`PRESSURE_IDLE` and `PRESSURE_PRESS` without needing flex or IMU data.
+
+---
+
 #### `record_session.py` — Session Recorder
 
-Records a complete session to a timestamped CSV. Each row pairs the freshest quaternion with the flex reading from that frame.
+Records a complete session to a timestamped CSV. Each row pairs the freshest quaternion, flex reading, and pressure reading from that frame.
 
 **Flow:**
 
 ```
 1. Serial thread starts (background daemon)
    └── Parses Q: → latest_q
-       Parses F: → writes CSV row (if recording=True)
+       Parses F: → latest_flex
+       Parses P: → writes CSV row (if recording=True)
 
 2. Main thread blocks on input("Press Enter to start")
 
@@ -379,7 +430,7 @@ Records a complete session to a timestamped CSV. Each row pairs the freshest qua
    └── Sets recording=True, start_time_s = time.monotonic()
 
 4. Serial thread writes rows:
-   [timestamp_ms] + [qw, qx, qy, qz] + [flex × 5]
+   [timestamp_ms] + [qw, qx, qy, qz] + [flex × 5] + [pressure × 3]
    Prints live feedback every 5 samples
 
 5. On Ctrl+C:
@@ -388,7 +439,7 @@ Records a complete session to a timestamped CSV. Each row pairs the freshest qua
    └── Prints summary (samples, duration, average rate)
 ```
 
-**Timing:** `Q:` is emitted by the firmware just before `F:` each loop iteration, so `latest_q` is always fresh when the row is written — quaternion and flex always correspond to the same 100ms frame.
+**Timing:** Firmware emits `Q:`, then `F:`, then `P:` each loop iteration. The recorder writes on `P:`, so quaternion, flex, and pressure correspond to the same 100ms frame.
 
 ---
 
@@ -432,7 +483,7 @@ Then recommends:
 The original tool from before flex sensors were added. Renders a solid 3D hand mesh (box segments per finger, not a wire skeleton) with:
 - All 5 fingers including ring and pinky
 - 3 joint segments per finger with rest angles and per-segment shading
-- FSR force sensor placeholder (`P:` lines, never emitted by current firmware)
+- FSR force sensor support from `P:` lines, kept as a legacy reference path
 
 Not actively used. Kept as reference for the full-5-finger geometry model.
 
@@ -445,14 +496,17 @@ Not actively used. Kept as reference for the full-5-finger geometry model.
 │  ESP32-S3 (every 100ms)                                 │
 │                                                         │
 │  BNO085 FIFO drain → qw, qx, qy, qz                    │
-│  analogRead(GPIO 1,2,4,5,6) → raw[5]                   │
+│  mux Y0/Y1/Y2/Y4/Y3 → raw flex[5]                     │
+│  mux Y5/Y6/Y7 → raw pressure[3]                       │
 │  normalizeFlex() → flex[5]                              │
+│  normalizePressure() → pressure[3]                      │
 │                                                         │
 │  Serial.println("Q:w,x,y,z")                           │
 │  Serial.println("F:t,ui,li,um,lm")                     │
+│  Serial.println("P:p1,p2,p3")                          │
 └────────────────────┬────────────────────────────────────┘
                      │ USB CDC @ 115200 baud
-                     │ /dev/cu.usbmodem101
+                     │ auto-detected USB CDC port
                      ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Python Serial Thread (background daemon)               │
@@ -460,30 +514,31 @@ Not actively used. Kept as reference for the full-5-finger geometry model.
 │  Q: → _state['q'] = [w, x, y, z]                       │
 │  F: → _state['f'] = [t, ui, li, um, lm]                │
 │       _state['times'].append(monotonic())               │
+│  P: → _state['p'] = [p1, p2, p3]                       │
 └────────────────────┬────────────────────────────────────┘
                      │ threading.Lock
                      ▼
 ┌─────────────────────────────────────────────────────────┐
 │  VisPy Timer Callback (30fps, main thread)              │
 │                                                         │
-│  q, flex, acc = snapshot(_state)                        │
+│  q, flex, pressure, acc = snapshot(_state)              │
 │                                                         │
 │  qr = _qrel(_ref_q, q)      ← removes neutral offset   │
 │  R  = _qmat(*qr)            ← quaternion → 3×3 matrix  │
 │                                                         │
-│  bone_verts, bone_colors,                               │
-│  joint_pos, joint_col = compute_skeleton(flex, R)       │
+│  hand vertices, faces, colors =                         │
+│      build_hand_mesh(flex, pressure, R)                 │
 │                                                         │
-│  hand_lines.set_data(...)                               │
-│  hand_joints.set_data(...)                              │
+│  hand_mesh.set_data(...)                                │
 │  bar_fills.set_data(build_fill_mesh(flex))              │
+│  pressure_fills.set_data(build_pressure_fill_mesh(p))   │
 │  HUD text updates                                       │
 │  canvas.update()                                        │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ▼
               VisPy OpenGL render
-         (3D skeletal hand + 2D flex panel)
+         (3D robot hand + 2D flex/pressure panel)
 ```
 
 ---
@@ -536,7 +591,7 @@ platformio device monitor
 
 ## Running the Tools
 
-> **Important:** Close the PlatformIO serial monitor before running any Python tool. Only one process can hold `/dev/cu.usbmodem101` at a time.
+> **Important:** Close the PlatformIO serial monitor before running any Python tool. Only one process can hold the auto-detected USB CDC port at a time.
 
 ### Full Glove Visualizer
 
@@ -544,7 +599,7 @@ platformio device monitor
 python3 glove_visualization.py
 ```
 
-- Opens a 1280×800 window with the 3D skeletal hand (left) and flex bar panel (right)
+- Opens a 1280×800 window with the 3D robot hand (left) and flex/pressure panel (right)
 - Left-drag to orbit the 3D view, scroll to zoom
 - Press `C` to capture the current hand orientation as the neutral reference pose — all subsequent motion is displayed relative to this pose
 - HUD shows: live quaternion, IMU accuracy level (color-coded 0–3), sample rate
@@ -571,6 +626,18 @@ python3 flex_visualization.py
 
 ---
 
+### Pressure Sensor Test Tool
+
+```bash
+python3 pressure_visualization.py
+```
+
+- Shows only the three FSR pressure channels from `P:p1,p2,p3`
+- Use this to verify mux channels Y5, Y6, and Y7
+- Tune `PRESSURE_IDLE` from no-touch raw readings and `PRESSURE_PRESS` from firm intended-contact readings in the firmware serial debug output
+
+---
+
 ### Session Recorder
 
 ```bash
@@ -584,7 +651,7 @@ python3 record_session.py
 
 Live feedback is printed every 5 samples:
 ```
-  [  12.4s]  samples=  124  Q=(+0.999,+0.006,-0.021,-0.009)  Flex=(1.00,0.31,0.44,0.00,0.02)
+  [  12.4s]  samples=  124  Q=(+0.999,+0.006,-0.021,-0.009)  Flex=(1.00,0.31,0.44,0.00,0.02)  P=(0.00,0.44,0.91)
 ```
 
 ---
@@ -658,7 +725,7 @@ Step 6 — Verify
 
 ## Recorded Data Format
 
-Session CSVs are written by `record_session.py` with one row per `F:` line received (~10 rows/sec).
+Session CSVs are written by `record_session.py` with one row per `P:` line received (~10 rows/sec). Firmware emits `Q:`, then `F:`, then `P:` each frame, so each row contains the freshest quaternion, flex, and pressure readings.
 
 **Filename:** `session_YYYYMMDD_HHMMSS.csv`
 
@@ -671,17 +738,20 @@ Session CSVs are written by `record_session.py` with one row per `F:` line recei
 | `qx` | float | Quaternion imaginary x |
 | `qy` | float | Quaternion imaginary y |
 | `qz` | float | Quaternion imaginary z |
-| `flex_thumb` | float | Thumb curl 0.0–1.0 (disconnected — unreliable) |
+| `flex_thumb` | float | Thumb curl 0.0–1.0 |
 | `flex_upper_index` | float | Upper index segment curl 0.0–1.0 |
 | `flex_lower_index` | float | Lower index segment curl 0.0–1.0 |
 | `flex_upper_middle` | float | Upper middle segment curl 0.0–1.0 |
 | `flex_lower_middle` | float | Lower middle segment curl 0.0–1.0 |
+| `pressure_1` | float | FSR pressure 1, 0.0–1.0 |
+| `pressure_2` | float | FSR pressure 2, 0.0–1.0 |
+| `pressure_3` | float | FSR pressure 3, 0.0–1.0 |
 
 **Example rows:**
 
 ```
-timestamp_ms,qw,qx,qy,qz,flex_thumb,flex_upper_index,flex_lower_index,flex_upper_middle,flex_lower_middle
-1,0.9997,0.0067,-0.0211,-0.0097,1.0,0.0,0.0,0.0,0.015
+timestamp_ms,qw,qx,qy,qz,flex_thumb,flex_upper_index,flex_lower_index,flex_upper_middle,flex_lower_middle,pressure_1,pressure_2,pressure_3
+1,0.9997,0.0067,-0.0211,-0.0097,1.0,0.0,0.0,0.0,0.015,0.0,0.438,0.912
 124,0.9997,0.006,-0.0212,-0.0098,1.0,0.0,0.0,0.0,0.009
 ```
 
@@ -691,10 +761,9 @@ timestamp_ms,qw,qx,qy,qz,flex_thumb,flex_upper_index,flex_lower_index,flex_upper
 
 | Issue | Location | Details |
 |---|---|---|
-| Thumb sensor disconnected | Hardware / all tools | GPIO1 reads unreliably. All tools force `flex[0]` to `0.0` and label it "DISCONNECTED". |
-| Flex calibration constants not per-sensor | `src/main.cpp` | All 5 sensors currently use identical `FLEX_MIN=2800, FLEX_MAX=3700`. Per-sensor tuning has not been done yet. Run the calibration workflow to fix. |
-| Curl direction mismatch | `flex_visualization.py:184` | Uses `_rx(+fu * MAX_CURL)` (curls away from viewer) while `glove_visualization.py:315` uses `_rx(-fu * MAX_CURL)` (curls toward viewer). The full visualizer is correct. |
-| Ring and pinky not rendered | `glove_visualization.py`, `flex_visualization.py` | Only thumb, index, and middle fingers are modeled in the skeletal visualizers. `visualize_imu.py` (legacy) models all 5. |
+| Flex calibration constants need final tuning | `src/main.cpp` | Per-sensor constants are present, but should be refined after the wiring is mechanically stable. Run the calibration workflow after the raw ADC values move smoothly. |
+| Pressure calibration constants need final tuning | `src/main.cpp` | `PRESSURE_IDLE/PRESSURE_PRESS` are safe starting values. Replace them after measuring raw no-contact and firm-contact values for each FSR. |
+| Ring and pinky are passive | `glove_visualization.py`, `flex_visualization.py` | The main visualizer renders ring and pinky as relaxed passive fingers because there are no live sensors for them. |
 | `calibrate_flex.py` must stay in sync with `main.cpp` | `calibrate_flex.py:37–38` | `CURRENT_FLEX_MIN/MAX` must match the firmware constants exactly or the ADC back-calculation will be wrong. |
 | Dead code in legacy visualizer | `visualize_imu.py:232–238` | Palm mesh is built, immediately discarded with `parts.pop()`, then rebuilt manually. Harmless but confusing. |
 | `visualize_imu.py` runs at 20fps | `visualize_imu.py` | Timer interval is `0.05s` vs. `1/30` in the newer tools. Inconsistency with no functional impact since it is unused. |

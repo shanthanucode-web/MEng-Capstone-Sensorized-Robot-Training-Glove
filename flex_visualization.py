@@ -14,11 +14,11 @@ Usage:
     Close the PlatformIO serial monitor first.
     Left-drag to orbit  |  Scroll to zoom
 
-Serial input on /dev/cu.usbmodem101 at 115200 baud — only F: lines are used:
+Serial input on an auto-detected USB CDC port at 115200 baud — only F: lines are used:
     F:thumb,ui,li,um,lm   (normalized 0.0=open .. 1.0=closed)
 
 Sensor mapping:
-    F[0] Thumb        — grey  (disconnected, always ~1.0)
+    F[0] Thumb        — grey
     F[1] Upper Index  — cyan
     F[2] Lower Index  — lighter cyan
     F[3] Upper Middle — orange
@@ -31,6 +31,7 @@ import numpy as np
 import serial
 from vispy import scene, app
 from collections import deque
+from glove_serial import open_glove_serial
 
 # =============================================================================
 # SECTION 1: CONSTANTS
@@ -40,7 +41,6 @@ from collections import deque
 WIN_W, WIN_H = 1280, 800
 
 # --- Serial ---
-SERIAL_PORT = '/dev/cu.usbmodem101'
 BAUD_RATE   = 115200
 
 # --- Colors (numpy RGBA float32 arrays) ---
@@ -92,9 +92,9 @@ WRIST_L = np.array([-0.22, -0.32, 0.0], dtype=np.float32)
 WRIST_R = np.array([ 0.22, -0.32, 0.0], dtype=np.float32)
 
 FINGER_DEFS = [
-    ('thumb',  0, 30, 0, 0, THUMB_COLOR,  True ),
-    ('index',  1,  0, 1, 2, INDEX_COLOR,  False),
-    ('middle', 2,  0, 3, 4, MIDDLE_COLOR, False),
+    ('thumb',  0, 30, 0, 0, THUMB_COLOR ),
+    ('index',  1,  0, 1, 2, INDEX_COLOR ),
+    ('middle', 2,  0, 3, 4, MIDDLE_COLOR),
 ]
 
 TIMER_INTERVAL = 1.0 / 30.0
@@ -115,13 +115,8 @@ _stop = threading.Event()
 def _serial_thread():
     while not _stop.is_set():
         try:
-            ser = serial.Serial(
-                SERIAL_PORT, BAUD_RATE, timeout=1,
-                dsrdtr=False, rtscts=False
-            )
-            ser.dtr = False
-            ser.rts = False
-            print(f'[serial] connected: {SERIAL_PORT}')
+            ser, port = open_glove_serial(BAUD_RATE, timeout=1)
+            print(f'[serial] connected: {port}')
 
             while not _stop.is_set():
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
@@ -175,14 +170,14 @@ def compute_skeleton(flex, R_imu):
     j_pos += [WRIST_L, WRIST_R]
     j_col += [JOINT_COLOR, JOINT_COLOR]
 
-    for (name, pidx, splay, fui, fli, color, is_thumb) in FINGER_DEFS:
+    for (name, pidx, splay, fui, fli, color) in FINGER_DEFS:
         base = PALM_NODES[pidx]
-        fu = 0.0 if is_thumb else float(np.clip(flex[fui], 0.0, 1.0))
-        fl = 0.0 if is_thumb else float(np.clip(flex[fli], 0.0, 1.0))
+        fu = float(np.clip(flex[fui], 0.0, 1.0))
+        fl = float(np.clip(flex[fli], 0.0, 1.0))
 
         R_sp = _rz(splay)
-        R_u  = _rx(fu * MAX_CURL)
-        R_l  = _rx(fl * MAX_CURL)
+        R_u  = _rx(-fu * MAX_CURL)
+        R_l  = _rx(-fl * MAX_CURL)
 
         dir_u   = R_sp @ R_u @ _UP
         knuckle = base + dir_u * PROX_L[name]
@@ -344,13 +339,6 @@ hud_rate = scene.visuals.Text(
     anchor_x='left', anchor_y='bottom',
     parent=canvas.scene
 )
-scene.visuals.Text(
-    'THUMB: DISCONNECTED', pos=(WIN_W - PANEL_W - 14, WIN_H - 14),
-    color='#444444', font_size=8,
-    anchor_x='right', anchor_y='bottom',
-    parent=canvas.scene
-)
-
 # =============================================================================
 # SECTION 8: TIMER CALLBACK (~30 fps)
 # =============================================================================

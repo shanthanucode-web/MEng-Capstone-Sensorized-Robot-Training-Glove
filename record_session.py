@@ -2,7 +2,8 @@
 """
 record_session.py — Data Glove Session Recorder
 ================================================
-Records IMU quaternion + flex sensor data from the ESP32 glove to a timestamped CSV.
+Records IMU quaternion + flex + pressure sensor data from the ESP32 glove to a
+timestamped CSV.
 
 Dependencies:
     pip install pyserial pandas
@@ -20,13 +21,16 @@ Output CSV columns:
     flex_lower_index      — lower index finger segment
     flex_upper_middle     — upper middle finger segment
     flex_lower_middle     — lower middle finger segment
+    pressure_1            — normalized FSR pressure on mux Y5
+    pressure_2            — normalized FSR pressure on mux Y6
+    pressure_3            — normalized FSR pressure on mux Y7
 
 Notes:
     - Close PlatformIO serial monitor before running (only one process can
-      hold /dev/cu.usbmodem101 at a time)
-    - One CSV row is written per F: line received (~10 samples/sec at 100ms)
-    - Q: always arrives just before F: in the firmware loop, so each row
-      pairs the freshest quaternion with the flex reading
+      hold the auto-detected USB CDC port at a time)
+    - One CSV row is written per P: line received (~10 samples/sec at 100ms)
+    - Firmware emits Q:, F:, then P: each frame, so each row pairs the freshest
+      quaternion, flex, and pressure readings
 """
 
 import csv
@@ -35,11 +39,11 @@ import time
 import threading
 import serial
 from datetime import datetime
+from glove_serial import detect_serial_port, open_glove_serial
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SERIAL_PORT = "/dev/cu.usbmodem101"
 BAUD_RATE   = 115200
 
 CSV_COLUMNS = [
@@ -47,6 +51,7 @@ CSV_COLUMNS = [
     "qw", "qx", "qy", "qz",
     "flex_thumb", "flex_upper_index", "flex_lower_index",
     "flex_upper_middle", "flex_lower_middle",
+    "pressure_1", "pressure_2", "pressure_3",
 ]
 
 # How often to print live feedback (every N samples)
@@ -56,6 +61,7 @@ FEEDBACK_INTERVAL = 5
 # Shared state — written by serial thread, read by main thread
 # ---------------------------------------------------------------------------
 latest_q     = [1.0, 0.0, 0.0, 0.0]  # [qw, qx, qy, qz]
+latest_flex  = [0.0] * 5
 state_lock   = threading.Lock()
 recording    = False       # set True after user presses Enter
 start_time_s = None        # monotonic clock time when recording began
@@ -72,23 +78,21 @@ def read_serial():
     """
     Runs in background. Connects to the glove serial port and parses lines.
 
-    Q: lines update latest_q (quaternion) — these arrive just before F: lines
-       in the firmware loop, so latest_q is always fresh when F: is processed.
+    Q: lines update latest_q (quaternion).
 
-    F: lines trigger a CSV row write (when recording is active). Each row
-       combines the current timestamp, latest quaternion, and the flex values
-       from this F: line.
+    F: lines update latest_flex.
+
+    P: lines trigger a CSV row write when recording is active. Firmware emits
+       Q:, F:, then P: per frame, so the current P: line closes a complete
+       quaternion + flex + pressure sample.
     """
-    global latest_q, recording, start_time_s, sample_count, csv_writer
+    global latest_q, latest_flex, recording, start_time_s, sample_count, csv_writer
 
     while not stop_event.is_set():
         try:
             # dsrdtr/rtscts=False prevents DTR/RTS toggling from resetting ESP32
-            ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1,
-                                dsrdtr=False, rtscts=False)
-            ser.dtr = False
-            ser.rts = False
-            print(f"[serial] connected to {SERIAL_PORT}")
+            ser, port = open_glove_serial(BAUD_RATE, timeout=1)
+            print(f"[serial] connected to {port}")
 
             while not stop_event.is_set():
                 line = ser.readline().decode("utf-8", errors="ignore").strip()
@@ -114,17 +118,31 @@ def read_serial():
                     except ValueError:
                         continue  # malformed line, skip
 
+                    with state_lock:
+                        latest_flex = flex
+
+                # --- Parse pressure line: P:p1,p2,p3 ---
+                elif line.startswith("P:"):
+                    parts = line[2:].split(",")
+                    if len(parts) != 3:
+                        continue
+                    try:
+                        pressure = [float(p) for p in parts]
+                    except ValueError:
+                        continue  # malformed line, skip
+
                     # Only record if the user has pressed Enter
                     if not recording:
                         continue
 
-                    # Snapshot timestamp and quaternion atomically
+                    # Snapshot timestamp and latest paired state atomically.
                     with state_lock:
                         q = latest_q[:]
+                        flex = latest_flex[:]
                         ts_ms = int((time.monotonic() - start_time_s) * 1000)
 
-                    # Write one CSV row: timestamp + quaternion + flex values
-                    csv_writer.writerow([ts_ms] + q + flex)
+                    # Write one CSV row: timestamp + quaternion + flex + pressure
+                    csv_writer.writerow([ts_ms] + q + flex + pressure)
                     sample_count += 1
 
                     # Print live feedback so the user knows recording is active
@@ -133,7 +151,9 @@ def read_serial():
                             f"\r  [{ts_ms / 1000:6.1f}s]  samples={sample_count:5d}  "
                             f"Q=({q[0]:+.3f},{q[1]:+.3f},{q[2]:+.3f},{q[3]:+.3f})  "
                             f"Flex=({flex[0]:.2f},{flex[1]:.2f},"
-                            f"{flex[2]:.2f},{flex[3]:.2f},{flex[4]:.2f})",
+                            f"{flex[2]:.2f},{flex[3]:.2f},{flex[4]:.2f})  "
+                            f"P=({pressure[0]:.2f},{pressure[1]:.2f},"
+                            f"{pressure[2]:.2f})",
                             end="",
                             flush=True,
                         )
@@ -158,7 +178,11 @@ def main():
     print("=" * 62)
     print("  Data Glove Session Recorder")
     print("=" * 62)
-    print(f"  Port : {SERIAL_PORT} @ {BAUD_RATE} baud")
+    try:
+        port_hint = detect_serial_port()
+    except RuntimeError:
+        port_hint = 'auto-detect (not currently present)'
+    print(f"  Port : {port_hint} @ {BAUD_RATE} baud")
     print(f"  Cols : {', '.join(CSV_COLUMNS)}")
     print()
     print("  Make sure the PlatformIO serial monitor is closed.")
