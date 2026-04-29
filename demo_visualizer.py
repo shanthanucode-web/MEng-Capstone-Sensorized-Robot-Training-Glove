@@ -7,6 +7,7 @@ Usage:
     python demo_visualizer.py --replay session_20260415_190134.csv
     python demo_visualizer.py --replay session_20260415_190134.csv --loop
     python demo_visualizer.py --simulate
+    python demo_visualizer.py --simulate --sim-task use_drill
 """
 
 import argparse
@@ -27,7 +28,7 @@ from glove_serial import open_glove_serial
 WIN_W, WIN_H = 1280, 800
 BAUD_RATE = 115200
 TIMER_INTERVAL = 1.0 / 30.0
-CONTACT_THRESHOLD = 0.08
+CONTACT_THRESHOLD = 0.03
 
 BG_COLOR = '#0A0A1A'
 PALM_COLOR = np.array([0.267, 0.267, 0.267, 1.00], dtype=np.float32)
@@ -64,16 +65,59 @@ FINGER_DEFS = [
     ('pinky', 4, -12.0, 3, 4, MIDDLE_PASSIVE, 'pinky', 0.15, 0.10, 0.08),
 ]
 
-SIM_PHASES = [
-    ('REST', 0.0, 0.5, 0.0, 0.0, 'neutral', 'neutral'),
-    ('REACHING', 0.5, 2.0, 0.0, 0.0, 'neutral', 'reach'),
-    ('PRE-GRASP', 2.0, 2.5, 0.4, 0.0, 'reach', 'reach'),
-    ('GRASPING', 2.5, 3.5, 0.85, 0.7, 'reach', 'reach'),
-    ('HOLDING', 3.5, 4.5, 0.85, 0.7, 'reach', 'transport'),
-    ('RELEASING', 4.5, 5.3, 0.0, 0.0, 'transport', 'transport'),
-    ('RETRACTING', 5.3, 6.3, 0.0, 0.0, 'transport', 'neutral'),
-    ('REST', 6.3, 8.0, 0.0, 0.0, 'neutral', 'neutral'),
-]
+SIM_TASKS = {
+    'pick_beaker': {
+        'description': 'Contact: fingertip grasp forces vary with object weight',
+        'phases': [
+            ('REST', 0.0, 0.5, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REACHING', 0.5, 2.0, 0.0, [0.0, 0.0, 0.0], (-35.0, 0.0, 0.0)),
+            ('PRE-GRASP', 2.0, 2.5, 0.4, [0.0, 0.0, 0.0], (-35.0, 0.0, 0.0)),
+            ('GRASPING', 2.5, 3.5, 0.85, [0.7, 0.64, 0.56], (-35.0, 0.0, 0.0)),
+            ('HOLDING', 3.5, 4.5, 0.85, [0.7, 0.64, 0.56], (-35.0, 20.0, 0.0)),
+            ('RELEASING', 4.5, 5.3, 0.0, [0.0, 0.0, 0.0], (-35.0, 20.0, 0.0)),
+            ('RETRACTING', 5.3, 6.3, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REST', 6.3, 8.0, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+        ],
+    },
+    'fold_cloth': {
+        'description': 'Contact: distributed palm pressure guides fabric smoothing',
+        'phases': [
+            ('OPEN', 0.0, 0.8, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REACH_OUT', 0.8, 1.6, 0.0, [0.0, 0.0, 0.0], (0.0, -25.0, 0.0)),
+            ('PINCH', 1.6, 2.2, [0.6, 0.5, 0.5, 0.3, 0.3], [0.4, 0.05, 0.4], (0.0, -25.0, 0.0)),
+            ('SWEEP_IN', 2.2, 3.4, [0.6, 0.5, 0.5, 0.3, 0.3], [0.4, 0.05, 0.4], (0.0, 20.0, 0.0)),
+            ('PRESS_DOWN', 3.4, 4.2, 0.1, [0.6, 0.6, 0.6], (-20.0, 20.0, 0.0)),
+            ('LIFT', 4.2, 4.8, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REST', 4.8, 5.4, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+        ],
+    },
+    'swirl_beaker': {
+        'description': 'Contact: grip adjusts dynamically to centripetal force',
+        'phases': [
+            ('OPEN', 0.0, 0.5, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('GRASP', 0.5, 1.3, 0.75, [0.55, 0.50, 0.58], (-15.0, 0.0, 0.0)),
+            ('SWIRL_1', 1.3, 2.1, 0.75, [0.60, 0.52, 0.62], (-15.0, 30.0, 0.0)),
+            ('SWIRL_2', 2.1, 2.9, 0.75, [0.48, 0.61, 0.54], (-15.0, 60.0, 0.0)),
+            ('SWIRL_3', 2.9, 3.7, 0.75, [0.62, 0.50, 0.60], (-15.0, 30.0, 0.0)),
+            ('SWIRL_4', 3.7, 4.5, 0.75, [0.50, 0.58, 0.55], (-15.0, 0.0, 0.0)),
+            ('RELEASE', 4.5, 5.2, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REST', 5.2, 5.6, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+        ],
+    },
+    'use_drill': {
+        'description': 'Contact: trigger + torque reaction invisible to cameras',
+        'phases': [
+            ('OPEN', 0.0, 0.5, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('GRIP', 0.5, 1.5, 0.80, [0.60, 0.60, 0.60], (-20.0, 0.0, 0.0)),
+            ('AIM', 1.5, 2.3, 0.80, [0.60, 0.60, 0.60], (-20.0, 8.0, 0.0)),
+            ('TRIGGER_PULL', 2.3, 3.1, [0.80, 0.95, 0.95, 0.80, 0.80], [0.90, 0.60, 0.65], (-20.0, 8.0, 0.0)),
+            ('DRILLING', 3.1, 4.3, [0.80, 0.95, 0.95, 0.80, 0.80], [0.75, 0.85, 0.88], (-20.0, 8.0, 0.0)),
+            ('RELEASE_TRIGGER', 4.3, 4.9, 0.80, [0.60, 0.60, 0.65], (-20.0, 8.0, 0.0)),
+            ('WITHDRAW', 4.9, 5.7, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+            ('REST', 5.7, 6.2, 0.0, [0.0, 0.0, 0.0], (0.0, 0.0, 0.0)),
+        ],
+    },
+}
 
 _state = {
     'q': [1.0, 0.0, 0.0, 0.0],
@@ -81,6 +125,8 @@ _state = {
     'p': [0.0] * 3,
     'mode': 'LIVE',
     'phase': '',
+    'sim_task': '',
+    'description': '',
     'replay_time_ms': 0,
     'replay_duration_ms': 0,
     'times': deque(maxlen=40),
@@ -95,6 +141,8 @@ def parse_args(argv=None):
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--replay', help='Replay a recorded CSV session')
     group.add_argument('--simulate', action='store_true', help='Run synthetic pick-and-place demo')
+    parser.add_argument('--sim-task', choices=sorted(SIM_TASKS), default='pick_beaker',
+                        help='Simulation task to run with --simulate')
     parser.add_argument('--loop', action='store_true', help='Loop replay mode continuously')
     parser.add_argument('--baud', type=int, default=BAUD_RATE)
     return parser.parse_args(argv)
@@ -192,7 +240,8 @@ def _parse_floats(line, prefix, expected):
         return None
 
 
-def update_state(q=None, f=None, p=None, phase=None, replay_time_ms=None, replay_duration_ms=None):
+def update_state(q=None, f=None, p=None, phase=None, sim_task=None, description=None,
+                 replay_time_ms=None, replay_duration_ms=None):
     now = time.monotonic()
     with _lock:
         if q is not None:
@@ -204,6 +253,10 @@ def update_state(q=None, f=None, p=None, phase=None, replay_time_ms=None, replay
             _state['p'] = list(p)
         if phase is not None:
             _state['phase'] = phase
+        if sim_task is not None:
+            _state['sim_task'] = sim_task
+        if description is not None:
+            _state['description'] = description
         if replay_time_ms is not None:
             _state['replay_time_ms'] = int(replay_time_ms)
         if replay_duration_ms is not None:
@@ -326,60 +379,88 @@ def _replay_thread(csv_path, should_loop):
         time.sleep(0.5)
 
 
-SIM_QUATS = {
-    'neutral': [1.0, 0.0, 0.0, 0.0],
-    'reach': quat_from_euler(pitch=-35.0),
-    'transport': quat_from_euler(pitch=-35.0, yaw=20.0),
-}
+def _target_array(value, length):
+    if isinstance(value, (list, tuple, np.ndarray)):
+        arr = np.asarray(value, dtype=np.float64)
+    else:
+        arr = np.full(length, float(value), dtype=np.float64)
+    if arr.size != length:
+        raise ValueError(f'Expected {length} values, got {arr.size}')
+    return arr
 
 
-def _simulate_sample(t):
-    phase = SIM_PHASES[-1]
-    for item in SIM_PHASES:
+def _phase_at(task_config, t):
+    phases = task_config['phases']
+    active_idx = len(phases) - 1
+    phase = phases[active_idx]
+    for idx, item in enumerate(phases):
         if item[1] <= t < item[2]:
+            active_idx = idx
             phase = item
             break
+    return active_idx, phase
 
-    name, start, end, flex_target, fsr_target, q0_name, q1_name = phase
-    local = smoothstep((t - start) / max(end - start, 1e-6))
-    prev_flex = 0.0
-    prev_fsr = 0.0
-    prev_q_name = q0_name
-    idx = SIM_PHASES.index(phase)
-    if idx > 0:
-        prev_flex = SIM_PHASES[idx - 1][3]
-        prev_fsr = SIM_PHASES[idx - 1][4]
-        prev_q_name = SIM_PHASES[idx - 1][5] if name == 'REACHING' else q0_name
 
-    flex_value = prev_flex + (flex_target - prev_flex) * local
-    fsr_value = prev_fsr + (fsr_target - prev_fsr) * local
-    if name == 'GRASPING':
-        contact_gate = smoothstep((flex_value - 0.70) / 0.15)
-        fsr_value = 0.7 * contact_gate
-    elif name == 'RELEASING':
-        fsr_value = 0.7 * (1.0 - smoothstep(local * 1.5))
+def _simulate_sample(t, task_name='pick_beaker'):
+    task_config = SIM_TASKS[task_name]
+    active_idx, phase = _phase_at(task_config, t)
+    phases = task_config['phases']
+    name, start, end, flex_target, pressure_target, wrist_target = phase
+    local_raw = (t - start) / max(end - start, 1e-6)
+    local = smoothstep(local_raw)
 
-    q_start = SIM_QUATS[prev_q_name if name == 'REACHING' else q0_name]
-    q_end = SIM_QUATS[q1_name]
+    if active_idx > 0:
+        prev = phases[active_idx - 1]
+        flex_start = _target_array(prev[3], 5)
+        pressure_start = _target_array(prev[4], 3)
+        wrist_start = prev[5]
+    else:
+        flex_start = _target_array(flex_target, 5)
+        pressure_start = _target_array(pressure_target, 3)
+        wrist_start = wrist_target
+
+    flex_end = _target_array(flex_target, 5)
+    pressure_end = _target_array(pressure_target, 3)
+    flex = flex_start + (flex_end - flex_start) * local
+    pressure = pressure_start + (pressure_end - pressure_start) * local
+
+    if task_name == 'pick_beaker' and name == 'GRASPING':
+        contact_gate = smoothstep((float(np.max(flex)) - 0.70) / 0.15)
+        pressure = pressure_end * contact_gate
+    elif task_name == 'pick_beaker' and name == 'RELEASING':
+        pressure = pressure_start * (1.0 - smoothstep(local_raw * 1.5))
+
+    q_start = quat_from_euler(*wrist_start)
+    q_end = quat_from_euler(*wrist_target)
     q = slerp(q_start, q_end, local)
-    flex = [flex_value] * 5
-    pressure = [fsr_value, fsr_value * 0.92, fsr_value * 0.80]
-    return name, q, flex, pressure
+    if task_name == 'use_drill' and name == 'DRILLING':
+        roll_q = quat_from_euler(roll=8.0 * math.sin(local_raw * 4.0 * math.pi))
+        q = _qnorm(_qmul(q, roll_q))
+    return name, q, flex.tolist(), pressure.tolist()
 
 
-def _simulate_thread():
+def _simulate_thread(task_name):
+    task_config = SIM_TASKS[task_name]
+    duration = task_config['phases'][-1][2]
     start = time.monotonic()
     while not _stop.is_set():
-        t = (time.monotonic() - start) % 8.0
-        phase, q, flex, pressure = _simulate_sample(t)
-        update_state(q=q, f=flex, p=pressure, phase=phase)
+        t = (time.monotonic() - start) % duration
+        phase, q, flex, pressure = _simulate_sample(t, task_name)
+        update_state(
+            q=q,
+            f=flex,
+            p=pressure,
+            phase=phase,
+            sim_task=task_name,
+            description=task_config['description'],
+        )
         time.sleep(1.0 / 30.0)
 
 
 def compute_skeleton(flex, pressure, R_imu):
     v_s, v_e, v_c = [], [], []
     joint_pos, joint_col = [], []
-    contact_pos = []
+    contact_tips = {}
 
     for i in range(4):
         v_s.append(PALM_NODES[i])
@@ -437,17 +518,21 @@ def compute_skeleton(flex, pressure, R_imu):
             joint_col.append(JOINT_COLOR)
 
         if name == 'index':
-            contact_pos.append(points[-1])
+            contact_tips['index'] = points[-1]
         elif name == 'middle':
-            contact_pos.append(points[-1])
+            contact_tips['middle'] = points[-1]
         elif name == 'thumb':
-            contact_pos.append(points[-1])
+            contact_tips['thumb'] = points[-1]
 
     bone_verts = np.empty((len(v_s) * 2, 3), dtype=np.float32)
     bone_verts[0::2] = np.asarray(v_s, dtype=np.float32)
     bone_verts[1::2] = np.asarray(v_e, dtype=np.float32)
     joint_pos = np.asarray(joint_pos, dtype=np.float32)
-    contact_pos = np.asarray(contact_pos, dtype=np.float32)
+    contact_pos = np.asarray([
+        contact_tips['index'],
+        contact_tips['middle'],
+        contact_tips['thumb'],
+    ], dtype=np.float32)
 
     bone_verts = (R_imu @ bone_verts.T).T
     joint_pos = (R_imu @ joint_pos.T).T
@@ -473,12 +558,22 @@ def compute_skeleton(flex, pressure, R_imu):
     )
 
 
+def _force_line(task_name, phase, pressure):
+    prefix = ''
+    if task_name:
+        prefix = f'{task_name.upper()} - {phase or "--"} | '
+    return (
+        f'{prefix}FSR: Index {pressure[0]:.2f}  '
+        f'Middle {pressure[1]:.2f}  Thumb {pressure[2]:.2f}'
+    )
+
+
 def run_app(args):
     global _ref_q
 
     if args.simulate:
         mode = 'SIMULATE'
-        worker = threading.Thread(target=_simulate_thread, daemon=True)
+        worker = threading.Thread(target=_simulate_thread, args=(args.sim_task,), daemon=True)
     elif args.replay:
         mode = 'REPLAY'
         worker = threading.Thread(target=_replay_thread, args=(args.replay, args.loop), daemon=True)
@@ -488,6 +583,9 @@ def run_app(args):
 
     with _lock:
         _state['mode'] = mode
+        if mode == 'SIMULATE':
+            _state['sim_task'] = args.sim_task
+            _state['description'] = SIM_TASKS[args.sim_task]['description']
     worker.start()
 
     canvas = scene.SceneCanvas(
@@ -522,16 +620,20 @@ def run_app(args):
         '', pos=(14, 38), color='#FFAA33', font_size=10, bold=True,
         anchor_x='left', anchor_y='top', parent=canvas.scene
     )
+    hud_description = scene.visuals.Text(
+        '', pos=(14, 60), color='#FFDD88', font_size=9,
+        anchor_x='left', anchor_y='top', parent=canvas.scene
+    )
     hud_quat = scene.visuals.Text(
-        'Q: --', pos=(14, 60), color='#CCCCFF', font_size=9,
+        'Q: --', pos=(14, 84), color='#CCCCFF', font_size=9,
         anchor_x='left', anchor_y='top', parent=canvas.scene
     )
     hud_rate = scene.visuals.Text(
-        '-- Hz', pos=(14, 80), color='#BBBBBB', font_size=9,
+        '-- Hz', pos=(14, 104), color='#BBBBBB', font_size=9,
         anchor_x='left', anchor_y='top', parent=canvas.scene
     )
     hud_replay = scene.visuals.Text(
-        '', pos=(14, 100), color='#BBBBBB', font_size=9,
+        '', pos=(14, 124), color='#BBBBBB', font_size=9,
         anchor_x='left', anchor_y='top', parent=canvas.scene
     )
     hud_cal = scene.visuals.Text(
@@ -546,6 +648,8 @@ def run_app(args):
             flex = list(_state['f'])
             pressure = list(_state['p'])
             phase = _state['phase']
+            sim_task = _state['sim_task']
+            description = _state['description']
             times = list(_state['times'])
             replay_time_ms = _state['replay_time_ms']
             replay_duration_ms = _state['replay_duration_ms']
@@ -558,7 +662,8 @@ def run_app(args):
         contact_markers.set_data(pos=cp, face_color=cc, symbol='disc', size=cs, edge_width=0)
 
         hud_mode.text = f'Mode: {mode}'
-        hud_phase.text = f'Phase: {phase}' if mode == 'SIMULATE' else ''
+        hud_phase.text = _force_line(sim_task if mode == 'SIMULATE' else '', phase, pressure)
+        hud_description.text = description if mode == 'SIMULATE' else ''
         hud_quat.text = f'Q: W:{q[0]:+.3f} X:{q[1]:+.3f} Y:{q[2]:+.3f} Z:{q[3]:+.3f}'
         if len(times) >= 2:
             dt = times[-1] - times[0]
@@ -585,6 +690,8 @@ def run_app(args):
     canvas.events.key_press.connect(on_key_press)
     timer = app.Timer(interval=TIMER_INTERVAL, connect=on_timer, start=True)
     print(f'[demo] mode={mode}')
+    if mode == 'SIMULATE':
+        print(f'[demo] sim_task={args.sim_task}')
     if mode == 'REPLAY':
         print(f'[demo] replay={args.replay} loop={args.loop}')
     print('[demo] left-drag to orbit | scroll to zoom | C to calibrate in live/replay')
@@ -599,6 +706,8 @@ def main(argv=None):
     args = parse_args(argv)
     if args.loop and not args.replay:
         raise SystemExit('--loop is only valid with --replay')
+    if args.sim_task != 'pick_beaker' and not args.simulate:
+        raise SystemExit('--sim-task is only valid with --simulate')
     run_app(args)
 
 

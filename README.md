@@ -124,6 +124,11 @@ python demo_visualizer.py --replay session_20260415_190134.csv --loop
 
 # Synthetic 8-second pick-and-place loop
 python demo_visualizer.py --simulate
+
+# Other synthetic task demos
+python demo_visualizer.py --simulate --sim-task fold_cloth
+python demo_visualizer.py --simulate --sim-task swirl_beaker
+python demo_visualizer.py --simulate --sim-task use_drill
 ```
 
 ### Visual Style and Controls
@@ -138,6 +143,14 @@ python demo_visualizer.py --simulate
 
 HUD fields show the current mode, simulation phase, quaternion, sample rate, and
 replay timestamp/total duration where applicable.
+The HUD also keeps force visible at all times:
+
+```text
+USE_DRILL - TRIGGER_PULL | FSR: Index 0.82  Middle 0.61  Thumb 0.74
+```
+
+In simulation mode, a persistent one-line contact-force argument stays on screen
+so the demo is legible to an audience without extra narration.
 
 ### Replay CSV Support
 
@@ -177,8 +190,8 @@ Replay timing is preserved by sleeping between rows according to
 
 ### Synthetic Demo Mode
 
-`python demo_visualizer.py --simulate` runs a continuous 8-second
-pick-and-place loop:
+`python demo_visualizer.py --simulate` defaults to `pick_beaker`, a continuous
+8-second pick-and-place loop:
 
 | Phase | Time | Behavior |
 |---|---:|---|
@@ -193,6 +206,21 @@ pick-and-place loop:
 
 Flex and pressure transitions use smoothstep easing. Wrist orientation uses
 quaternion SLERP between keyframes.
+
+Additional simulation tasks emphasize why FSRs matter:
+
+| Task | Command | Contact-force argument |
+|---|---|---|
+| `pick_beaker` | `python demo_visualizer.py --simulate --sim-task pick_beaker` | Contact: fingertip grasp forces vary with object weight |
+| `fold_cloth` | `python demo_visualizer.py --simulate --sim-task fold_cloth` | Contact: distributed palm pressure guides fabric smoothing |
+| `swirl_beaker` | `python demo_visualizer.py --simulate --sim-task swirl_beaker` | Contact: grip adjusts dynamically to centripetal force |
+| `use_drill` | `python demo_visualizer.py --simulate --sim-task use_drill` | Contact: trigger + torque reaction invisible to cameras |
+
+The red contact markers use a lower demo threshold (`0.03`) than the data
+pipeline contact threshold so light touch is visible during presentations.
+`use_drill` is the clearest force-data demo: the hand shape stays nearly
+constant while index trigger force, middle/thumb torque reaction, and small
+wrist roll corrections change over time.
 
 ### Other Visualization Tools
 

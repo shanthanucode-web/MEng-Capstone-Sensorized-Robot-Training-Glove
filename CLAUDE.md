@@ -73,6 +73,9 @@ Launch modes:
     python demo_visualizer.py --replay session_20260415_190134.csv
     python demo_visualizer.py --replay session_20260415_190134.csv --loop
     python demo_visualizer.py --simulate
+    python demo_visualizer.py --simulate --sim-task fold_cloth
+    python demo_visualizer.py --simulate --sim-task swirl_beaker
+    python demo_visualizer.py --simulate --sim-task use_drill
 
 Modes:
 
@@ -80,8 +83,10 @@ Modes:
   and parses `Q:`, `F:`, and `P:` lines.
 - Replay mode reads CSV rows in timestamp order, sleeps by `timestamp_ms`
   deltas, and can loop continuously with `--loop`.
-- Simulate mode generates an 8-second pick-and-place loop with smooth flex/FSR
-  transitions and quaternion SLERP.
+- Simulate mode generates task-specific loops with smooth flex/FSR transitions
+  and quaternion SLERP. `pick_beaker` is the default task.
+- Supported simulation tasks: `pick_beaker`, `fold_cloth`, `swirl_beaker`,
+  and `use_drill`.
 
 Replay schemas:
 
@@ -98,7 +103,11 @@ Skeleton behavior:
 - Palm and wrist are line segments.
 - Thumb has two segments; all other fingers have MCP/PIP/DIP chains.
 - Ring follows middle at 90%; pinky follows middle at 78%.
-- FSR contact above 0.08 pulses index, middle, and thumb tips red.
+- FSR contact above 0.03 pulses index, middle, and thumb tips red in the demo.
+- HUD force readout is intentionally prominent:
+  `USE_DRILL - TRIGGER_PULL | FSR: Index 0.82  Middle 0.61  Thumb 0.74`.
+- Simulation descriptions keep the core argument visible:
+  cameras show pose, while FSRs show contact force.
 - Press `C` in live/replay mode to recapture the neutral quaternion.
 
 ## Validation Tools
@@ -113,6 +122,7 @@ Demo validation:
     python3 -m py_compile demo_visualizer.py
     python demo_visualizer.py --replay session_20260415_190134.csv --loop
     python demo_visualizer.py --simulate
+    python demo_visualizer.py --simulate --sim-task use_drill
 
 `test_mux.py` requires a temporary firmware debug command and should not be left
 enabled in production firmware.
